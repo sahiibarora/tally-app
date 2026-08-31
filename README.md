@@ -31,7 +31,7 @@ pip install -r requirements.txt
 python manage.py migrate
 python manage.py runserver
 ```
-Open **http://127.0.0.1:8000** — that's the whole app: sign up, log in, use it.
+Open **(https://tally-app-knot.onrender.com)** — that's the whole app: sign up, log in, use it.
 
 ## Deploy it for real (so it works on your phone, from anywhere)
 See `DEPLOY.md` for the exact free-hosting steps.
