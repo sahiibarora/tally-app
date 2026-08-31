@@ -1,4 +1,4 @@
-# Tally — one deployable app
+# Tally — finance tracker
 
 A personal finance tracker with real accounts (name + email + password),
 multi-account tracking, custom categories, budgets, recurring entries,
