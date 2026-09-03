@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-import dj_database_url
+import dj_database_url  
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -54,11 +54,17 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "tally.wsgi.application"
 
-# SQLite for local dev; set DATABASE_URL (e.g. Railway's Postgres URL) in production.
+# SQLite for local dev; set DATABASE_URL (e.g. Supabase's pooler URL) in production.
+# conn_max_age=0 is required here: Supabase's Supavisor pooler closes idle
+# connections on its own schedule, so Django must never try to reuse a
+# connection across requests — it has to open a fresh one every time.
+# Reusing one (conn_max_age > 0) causes an intermittent "works on the 2nd
+# click, not the 1st" bug, because the first request after any idle gap
+# tries to use a connection the pooler already closed.
 DATABASES = {
     "default": dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
+        conn_max_age=0,
     )
 }
 
