@@ -1,5 +1,6 @@
 from django.db import transaction
 from rest_framework import status, viewsets
+from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -193,3 +194,20 @@ class ImportView(APIView):
                 Budget.objects.create(user=request.user, category=cat, monthly_limit=limit)
 
         return Response({"imported": len(entries)})
+
+
+class HealthView(APIView):
+    """Public liveness check that also performs a real database query.
+
+    Supabase's free tier pauses a project after about a week without database
+    activity. A scheduled job calls this endpoint every couple of days, which
+    keeps the project awake (and wakes the sleeping Render server first).
+    Returns nothing sensitive: just "ok".
+    """
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        Account.objects.exists()  # real query against a real table
+        return Response({"status": "ok"})
