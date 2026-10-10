@@ -2,10 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Plus, Pencil, Trash2, ChevronLeft, ChevronRight, X, Check, Target, Download, Upload,
   Sun, Moon, Copy, ArrowUp, ArrowDown, SlidersHorizontal, Repeat, Wallet, Search, Tag,
-  Share2, FileSpreadsheet, AlertTriangle, PartyPopper, Lightbulb, LogOut, Undo2,
+  Share2, FileSpreadsheet, AlertTriangle, PartyPopper, Lightbulb, LogOut, Undo2, ShieldCheck,
 } from "lucide-react";
-import Auth from "./Auth";
+import Auth, { ResetPasswordScreen } from "./Auth";
 import { api } from "./api";
+import { LockScreen, LockSettings, isLockEnabled, disableLock } from "./AppLock";
 
 const LIGHT = {
   paper: "#F7F4EE", card: "#FFFFFF", ink: "#2B2A27", inkSoft: "#635E56", line: "#E5DFD3",
@@ -155,27 +156,85 @@ function emptyForm(accountId, defaultCategory) {
 export default function App() {
   const [session, setSession] = useState(null);
   const [booting, setBooting] = useState(true);
+  const [locked, setLocked] = useState(false);
+
+  // A password-reset email link lands here as ?reset_uid=...&reset_token=...
+  const resetParams = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const uid = params.get("reset_uid");
+    const token = params.get("reset_token");
+    return uid && token ? { uid, token } : null;
+  }, []);
 
   useEffect(() => {
     const raw = localStorage.getItem("tally-session");
     if (raw) {
-      try { setSession(JSON.parse(raw)); } catch (e) { /* ignore */ }
+      try {
+        setSession(JSON.parse(raw));
+        setLocked(isLockEnabled());
+      } catch (e) {
+        /* ignore */
+      }
     }
     setBooting(false);
+  }, []);
+
+  // Re-lock whenever the app is backgrounded (switch apps, lock the phone,
+  // etc.), so returning to it always shows the lock screen again rather
+  // than only locking once per cold start.
+  useEffect(() => {
+    function onVisibility() {
+      if (document.hidden && isLockEnabled()) setLocked(true);
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
 
   function handleAuthed(result) {
     const next = { token: result.token, name: result.name, email: result.email };
     localStorage.setItem("tally-session", JSON.stringify(next));
     setSession(next);
+    setLocked(isLockEnabled());
   }
   function handleLogout() {
     localStorage.removeItem("tally-session");
     setSession(null);
   }
+  function clearResetParams() {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("reset_uid");
+    url.searchParams.delete("reset_token");
+    window.history.replaceState({}, "", url.toString());
+  }
 
   if (booting) return null;
+
+  if (resetParams) {
+    return (
+      <ResetPasswordScreen
+        uid={resetParams.uid}
+        token={resetParams.token}
+        onDone={(result) => {
+          clearResetParams();
+          handleAuthed(result);
+        }}
+      />
+    );
+  }
+
   if (!session) return <Auth onAuthed={handleAuthed} />;
+  if (locked) {
+    return (
+      <LockScreen
+        onUnlock={() => setLocked(false)}
+        onForgot={() => {
+          disableLock();
+          setLocked(false);
+          handleLogout();
+        }}
+      />
+    );
+  }
   return <Tracker session={session} onLogout={handleLogout} onNameChange={(name) => setSession((s) => ({ ...s, name }))} />;
 }
 
@@ -195,8 +254,89 @@ function Tracker({ session, onLogout, onNameChange }) {
   const [mode, setMode] = useState("light");
   const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
 
+  const [notifStatus, setNotifStatus] = useState("default"); // default | granted | denied | unsupported
+  const [notifBusy, setNotifBusy] = useState(false);
+  const [notifError, setNotifError] = useState("");
+
   const C = mode === "dark" ? DARK : LIGHT;
   const now = useMemo(() => new Date(), []);
+
+  // Register the service worker once on load — it's what lets a push
+  // notification arrive even when the app isn't open. Subscribing to actual
+  // pushes only happens when the user taps "Enable" (handleEnableNotifications).
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setNotifStatus("unsupported");
+      return;
+    }
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    if (typeof Notification !== "undefined") {
+      setNotifStatus(Notification.permission === "granted" ? "granted" : "default");
+      if (Notification.permission === "granted") resubscribePush();
+    }
+  }, []);
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = atob(base64);
+    return Uint8Array.from([...rawData].map((c) => c.charCodeAt(0)));
+  }
+
+  async function resubscribePush() {
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const { publicKey } = await api.getVapidPublicKey(token);
+      if (!publicKey) return; // backend has no VAPID keys configured yet
+      let sub = await registration.pushManager.getSubscription();
+      if (!sub) {
+        sub = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+      }
+      const json = sub.toJSON();
+      await api.subscribePush(token, { endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth });
+    } catch (e) {
+      // Non-fatal — the in-app banner still works even if push setup fails.
+    }
+  }
+
+  // Stop notifications to this browser before logging out, so budget amounts
+  // don't keep appearing on a phone that's no longer signed in.
+  async function handleLogoutClick() {
+    try {
+      if ("serviceWorker" in navigator) {
+        const registration = await navigator.serviceWorker.ready;
+        const sub = await registration.pushManager.getSubscription();
+        if (sub) {
+          await api.unsubscribePush(token, sub.endpoint);
+          await sub.unsubscribe();
+        }
+      }
+    } catch (e) {
+      // Don't block logging out if this cleanup fails.
+    }
+    onLogout();
+  }
+
+  async function handleEnableNotifications() {
+    setNotifBusy(true);
+    setNotifError("");
+    try {
+      const permission = await Notification.requestPermission();
+      setNotifStatus(permission);
+      if (permission === "granted") {
+        await resubscribePush();
+      } else if (permission === "denied") {
+        setNotifError("Notifications are blocked for this site in your browser settings.");
+      }
+    } catch (e) {
+      setNotifError("Couldn't enable notifications on this device.");
+    } finally {
+      setNotifBusy(false);
+    }
+  }
 
   async function loadAll() {
     setLoadError("");
@@ -507,6 +647,7 @@ function Tracker({ session, onLogout, onNameChange }) {
   const [editingRecurring, setEditingRecurring] = useState(null);
   const [form, setForm] = useState(emptyForm());
   const [formError, setFormError] = useState("");
+  const [submittingForm, setSubmittingForm] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
   function openAdd() {
@@ -531,6 +672,7 @@ function Tracker({ session, onLogout, onNameChange }) {
     if (!amt || amt <= 0) return setFormError("Enter an amount greater than zero.");
     if (!form.accountId) return setFormError("Choose an account.");
     setFormError("");
+    setSubmittingForm(true);
     try {
       if (editingId) {
         const saved = await api.updateEntry(token, editingId, {
@@ -547,6 +689,8 @@ function Tracker({ session, onLogout, onNameChange }) {
       closeForm();
     } catch (err) {
       setFormError(err.message || "Could not save entry.");
+    } finally {
+      setSubmittingForm(false);
     }
   }
 
@@ -678,7 +822,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
   const filterCategoryOptions = [...new Set([...categoryLists.expense, ...categoryLists.income])];
 
   return (
-    <div style={{ background: C.paper, fontFamily: FONTS.bodyFont, color: C.ink, minHeight: "100vh" }} className="w-full">
+    <div style={{ background: C.paper, fontFamily: FONTS.bodyFont, color: C.ink, minHeight: "100vh", overflowX: "hidden" }} className="w-full">
       <style>{buildGlobalStyles(C)}</style>
 
       {/* Undo toasts */}
@@ -723,7 +867,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
             className="ft-focus p-2 rounded-full hover:opacity-80 transition-opacity focus:outline-none">
             {mode === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
           </button>
-          <button onClick={onLogout} aria-label="Log out" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }}
+          <button onClick={handleLogoutClick} aria-label="Log out" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }}
             className="ft-focus p-2 rounded-full hover:opacity-80 transition-opacity focus:outline-none">
             <LogOut size={16} aria-hidden="true" />
           </button>
@@ -974,6 +1118,32 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
           )}
         </div>
 
+        {/* Security & notifications */}
+        <div style={{ background: C.card, border: `1px solid ${C.line}` }} className="rounded-xl p-5 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <ShieldCheck size={15} style={{ color: C.sage }} aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Security &amp; notifications</h2>
+          </div>
+          <LockSettings C={C} />
+          <div style={{ borderTop: `1px solid ${C.line}` }} className="mt-4 pt-4">
+            <div className="flex items-center justify-between mb-1">
+              <span style={{ color: C.ink }} className="text-sm">Budget alerts</span>
+              <button
+                onClick={notifStatus === "granted" ? undefined : handleEnableNotifications}
+                disabled={notifStatus === "granted" || notifBusy || notifStatus === "unsupported"}
+                style={{ color: notifStatus === "granted" ? C.sage : C.sage }}
+                className="ft-focus text-xs font-medium underline underline-offset-2 focus:outline-none disabled:no-underline disabled:opacity-80"
+              >
+                {notifStatus === "granted" ? "Enabled" : notifStatus === "denied" ? "Blocked in browser settings" : notifStatus === "unsupported" ? "Not supported here" : notifBusy ? "Enabling…" : "Enable"}
+              </button>
+            </div>
+            <p style={{ color: C.inkSoft }} className="text-xs">
+              Get a real phone notification the moment a budget crosses 80% or goes over — even if the app isn't open.
+            </p>
+            {notifError && <div role="alert" style={{ color: C.clay }} className="text-xs mt-1">{notifError}</div>}
+          </div>
+        </div>
+
         {/* Trends */}
         <div style={{ background: C.card, border: `1px solid ${C.line}` }} className="rounded-xl p-5 mb-6">
           <h2 style={{ color: C.inkSoft, letterSpacing: "0.1em" }} className="text-xs font-semibold uppercase mb-1">6-Month Trend</h2>
@@ -1083,7 +1253,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
             {editingId && editingRecurring && (<div style={{ color: C.inkSoft }} className="flex items-center gap-1.5 text-xs mb-3"><Repeat size={12} aria-hidden="true" />Part of a {editingRecurring} series — this change only affects this occurrence.</div>)}
             {formError && <div role="alert" style={{ color: C.clay }} className="text-xs mb-3">{formError}</div>}
             <div className="flex gap-2">
-              <button onClick={submitForm} style={{ background: C.ink, color: C.paper }} className="ft-focus text-sm font-medium px-4 py-2 rounded-lg hover:opacity-90 focus:outline-none">{editingId ? "Save changes" : "Add entry"}</button>
+              <button onClick={submitForm} disabled={submittingForm} style={{ background: C.ink, color: C.paper }} className="ft-focus text-sm font-medium px-4 py-2 rounded-lg hover:opacity-90 focus:outline-none disabled:opacity-60">{submittingForm ? "Saving…" : editingId ? "Save changes" : "Add entry"}</button>
               <button onClick={closeForm} style={{ color: C.inkSoft, border: `1px solid ${C.line}` }} className="ft-focus text-sm font-medium px-4 py-2 rounded-lg hover:opacity-70 focus:outline-none">Cancel</button>
             </div>
           </div>
@@ -1136,7 +1306,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
                   <span aria-hidden="true" style={{ background: categoryColor(e.category), width: 7, height: 7, borderRadius: "50%", display: "inline-block" }} />{e.category}
                 </span>
                 {selectedAccountId === "all" && accounts.length > 1 && (<span style={{ color: C.inkSoft }} className="text-xs shrink-0 hidden sm:inline">{accounts.find((a) => a.id === e.accountId)?.name || ""}</span>)}
-                <div className="text-sm flex-1 truncate" style={{ color: e.note ? C.ink : C.inkSoft }}>{e.note || "—"}</div>
+                <div className="text-sm flex-1 truncate min-w-0" style={{ color: e.note ? C.ink : C.inkSoft }}>{e.note || "—"}</div>
                 <div style={{ color: e.type === "income" ? C.sage : C.clay }} className="text-sm font-semibold shrink-0">
                   <span className="ft-sr-only">{e.type === "income" ? "Income" : "Expense"}</span>{e.type === "income" ? "+" : "-"}{fmtMoney(e.amount)}
                 </div>
@@ -1179,9 +1349,9 @@ function Logo({ C }) {
 }
 function StatCard({ label, value, color, bg, border, C, ready }) {
   return (
-    <div style={{ background: bg, border: border ? `1px solid ${C.line}` : "none" }} className="rounded-xl px-4 py-3">
+    <div style={{ background: bg, border: border ? `1px solid ${C.line}` : "none", minWidth: 0 }} className="rounded-xl px-4 py-3">
       <div style={{ color: C.inkSoft }} className="text-xs mb-1">{label}</div>
-      {ready ? (<div style={{ color, fontFamily: FONTS.displayFont }} className="text-lg sm:text-xl truncate">{value}</div>) : (<div className="ft-skeleton" style={{ height: "20px", width: "70%" }} />)}
+      {ready ? (<div style={{ color, fontFamily: FONTS.displayFont }} className="text-lg sm:text-xl truncate min-w-0">{value}</div>) : (<div className="ft-skeleton" style={{ height: "20px", width: "70%" }} />)}
     </div>
   );
 }

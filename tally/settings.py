@@ -69,8 +69,46 @@ DATABASES = {
 }
 
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 6}},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 8}},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
+
+# ---------- Production security headers ----------
+# Render terminates HTTPS at its own proxy and talks to Django over plain
+# HTTP internally, so Django needs this header to know a request actually
+# arrived over HTTPS — without it, SECURE_SSL_REDIRECT would redirect-loop.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 30  # 30 days, raise once confident nothing's broken
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+
+# ---------- Email (for password reset) ----------
+# Defaults to printing emails to the server log when unconfigured, so local
+# dev and tests never need real credentials. Set these env vars in Render for
+# real delivery — see README for the Gmail App Password setup.
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+if EMAIL_HOST:
+    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+    EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+    EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+    EMAIL_USE_TLS = True
+else:
+    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL") or (
+    f"Tally <{EMAIL_HOST_USER}>" if EMAIL_HOST and EMAIL_HOST_USER else "Tally <no-reply@tally.app>"
+)
+
+# ---------- Web push (budget alert notifications) ----------
+# Generate with: python manage.py generate_vapid_keys
+VAPID_PUBLIC_KEY = os.environ.get("VAPID_PUBLIC_KEY", "")
+VAPID_PRIVATE_KEY = os.environ.get("VAPID_PRIVATE_KEY", "")
+VAPID_CLAIM_EMAIL = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:no-reply@tally.app")
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "Asia/Kolkata"
@@ -96,6 +134,16 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Scoped throttles: login/signup/password-reset are brute-force targets,
+    # so they get their own tight limits, tracked per IP address.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "auth": "5/min",                 # per IP address, signup + login
+        "password_reset": "3/min",       # per IP address
+        "login_email": "10/hour",        # per email address being tried
+    },
 }
 
 CORS_ALLOW_ALL_ORIGINS = os.environ.get("CORS_ALLOW_ALL", "True") == "True"

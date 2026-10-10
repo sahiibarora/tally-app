@@ -1,40 +1,39 @@
-# Deploying Tally for free (so it works on your phone, for anyone)
+# Deploying Tally (Render + Supabase, free tiers)
 
-Recommended combo: **Render** (hosts the app, free) + **Supabase** (free
-Postgres that doesn't expire — Render's own free database expires after 30
-days, which would defeat the point of "remembers everyone's data").
+## Environment variables (Render -> your service -> Environment)
 
-## Step 1 — Get a database (Supabase)
-1. In Supabase, create a new project (free tier).
-2. Once it's ready, go to Project Settings → Database → Connection string
-   → copy the **URI** (starts with `postgresql://...`). This is your
-   `DATABASE_URL`.
+| Key | Value | Notes |
+|---|---|---|
+| `SECRET_KEY` | long random string | already set; never share it |
+| `DEBUG` | `False` | turns on HTTPS-only cookies and security headers |
+| `ALLOWED_HOSTS` | `tally-app-knot.onrender.com` | exact host, no `*`, no `https://` |
+| `DATABASE_URL` | Supabase **Transaction pooler** URI (port 6543) | already set |
+| `CORS_ALLOW_ALL` | `False` | the app and API share one address, so cross-site access isn't needed |
+| `VAPID_PUBLIC_KEY` | from `python manage.py generate_vapid_keys` | lets phones subscribe to notifications |
+| `VAPID_PRIVATE_KEY` | from the same command | **secret**: signs notifications; never commit it |
+| `VAPID_CLAIM_EMAIL` | `mailto:you@example.com` | a contact address for push services |
+| `EMAIL_HOST` | `smtp.gmail.com` | for password-reset emails |
+| `EMAIL_PORT` | `587` | |
+| `EMAIL_HOST_USER` | your Gmail address | |
+| `EMAIL_HOST_PASSWORD` | a Gmail **App Password** (16 characters, no spaces) | NOT your normal Gmail password |
 
-## Step 2 — Push this folder to a GitHub repo
-Render deploys from a Git repo. Create a new repo (public or private) and
-push everything in this `tally-app/` folder to it — this whole folder is
-the app.
+Until the `EMAIL_*` values are set, password-reset emails are only printed to the server log (nothing reaches an inbox).
+Until the `VAPID_*` values are set, notifications are silently skipped (everything else works).
 
-## Step 3 — Create the web service on Render
-1. New → Web Service → connect the repo you just pushed.
-2. Build command: `pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate`
-3. Start command: `gunicorn tally.wsgi`
-4. Add environment variables:
-   - `SECRET_KEY` — any long random string
-   - `DEBUG` — `False`
-   - `ALLOWED_HOSTS` — `*.onrender.com` (or your custom domain later)
-   - `DATABASE_URL` — the Supabase connection string from Step 1
-   - `CORS_ALLOW_ALL` — `True` (safe here since the frontend and API are
-     the same origin anyway — this only matters if you ever split them again)
-5. Deploy. Render gives you a live HTTPS URL like `https://tally-xyz.onrender.com`.
+## Getting a Gmail App Password
+1. Your Google Account needs **2-Step Verification** switched on.
+2. In your Google Account, search for **App passwords** and create one called `Tally`.
+3. Copy the 16 characters Google shows (remove the spaces) into `EMAIL_HOST_PASSWORD`.
 
-Open that URL on your phone — sign up, and you're using the real thing.
+## Build / start commands (unchanged)
+- Build: `pip install -r requirements.txt && python manage.py collectstatic --noinput && python manage.py migrate`
+- Start: `gunicorn tally.wsgi`
 
-## Notes
-- Free web services sleep after 15 minutes idle; the first visit after
-  that takes ~30-60 seconds to wake up. Totally normal for a free tier —
-  not a bug, and fine for demoing to friends or in an interview.
-- If you'd rather I do the actual provisioning for you instead of the
-  dashboard, connect the Render option from the card I showed earlier in
-  this chat — once it's connected I can create the web service and set
-  the env vars directly instead of you clicking through the dashboard.
+The build now includes one new migration (push subscriptions + a date index). It only adds things; existing data is untouched.
+
+## Notifications on a phone
+- **iPhone/iPad:** needs iOS 16.4 or newer, and Tally must be added to the Home Screen. Open it **from the Home Screen icon**, then tap **Enable** under *Security & notifications*. Notifications do not work from a normal Safari tab.
+- **Android:** works in Chrome, installed or not. Tap **Enable** and allow the permission.
+
+## Running the tests
+`python manage.py test`

@@ -1,11 +1,12 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework import status, viewsets
 from rest_framework.permissions import AllowAny
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Account, Budget, Category, Entry, Goal, Preference
+from .models import Account, Budget, Category, Entry, Goal, Preference, PushSubscription
+from .push import check_and_notify_budget
 from .serializers import (
     AccountSerializer,
     BudgetSerializer,
@@ -13,22 +14,53 @@ from .serializers import (
     EntrySerializer,
     GoalSerializer,
     PreferenceSerializer,
+    PushSubscriptionSerializer,
 )
 from .utils import build_recurring_dates
 import uuid
 
 
+def _notify_for_new_entries(user, category, new_entries):
+    """Sum only what landed in the current month (future-dated recurring
+    entries don't affect this month's budget), then check for a crossing."""
+    from datetime import date
+
+    today = date.today()
+    added = sum(
+        (e.amount for e in new_entries if e.date.year == today.year and e.date.month == today.month),
+        start=0,
+    )
+    try:
+        check_and_notify_budget(user, category, added)
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).exception("Budget notification check failed")
+
+
 class UserScopedViewSet(viewsets.ModelViewSet):
+    duplicate_message = "That already exists."
+
     def get_queryset(self):
         return self.queryset.filter(user=self.request.user)
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    def create(self, request, *args, **kwargs):
+        # The uniqueness rule involves `user`, which isn't a client-supplied
+        # field, so DRF can't build its usual "already exists" validator.
+        # Without this, a duplicate name surfaces as a raw 500 error.
+        try:
+            return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            return Response({"detail": self.duplicate_message}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class AccountViewSet(UserScopedViewSet):
     queryset = Account.objects.all()
     serializer_class = AccountSerializer
+    duplicate_message = "An account with that name already exists."
 
     def destroy(self, request, *args, **kwargs):
         account = self.get_object()
@@ -45,6 +77,7 @@ class AccountViewSet(UserScopedViewSet):
 class CategoryViewSet(UserScopedViewSet):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+    duplicate_message = "A category with that name already exists for this type."
 
     def destroy(self, request, *args, **kwargs):
         category = self.get_object()
@@ -72,36 +105,44 @@ class EntryViewSet(UserScopedViewSet):
         account = Account.objects.filter(user=request.user, id=data.get("account")).first()
         if not account:
             return Response({"detail": "Choose a valid account."}, status=400)
+        if repeat and repeat != "none" and repeat not in ("weekly", "monthly", "yearly"):
+            return Response({"detail": "Repeat must be weekly, monthly, or yearly."}, status=400)
+
+        # Validate through the serializer in BOTH cases, so recurring entries
+        # get exactly the same checks (positive amount, valid date, valid
+        # type) as one-off entries instead of bypassing them.
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
 
         if not repeat or repeat == "none":
-            serializer = self.get_serializer(data=data)
-            serializer.is_valid(raise_exception=True)
-            serializer.save(user=request.user)
+            entry = serializer.save(user=request.user)
+            if entry.type == "expense":
+                _notify_for_new_entries(request.user, entry.category, [entry])
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         # Recurring: generate the whole bounded series up front, sharing a
         # recurring_group id, mirroring the original client-side behavior.
-        from datetime import date as date_cls
-        base_date = date_cls.fromisoformat(data["date"])
+        vd = serializer.validated_data
         group_id = uuid.uuid4().hex[:20]
-        dates = build_recurring_dates(base_date, repeat)
-        created = []
+        dates = build_recurring_dates(vd["date"], repeat)
         with transaction.atomic():
-            for d in dates:
-                entry = Entry.objects.create(
+            created = [
+                Entry.objects.create(
                     user=request.user,
                     account=account,
-                    type=data["type"],
+                    type=vd["type"],
                     date=d,
-                    amount=data["amount"],
-                    category=data["category"],
-                    note=data.get("note", ""),
+                    amount=vd["amount"],
+                    category=vd["category"],
+                    note=vd.get("note", ""),
                     recurring=repeat,
                     recurring_group=group_id,
                 )
-                created.append(entry)
-        serializer = self.get_serializer(created, many=True)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+                for d in dates
+            ]
+        if vd["type"] == "expense":
+            _notify_for_new_entries(request.user, vd["category"], created)
+        return Response(self.get_serializer(created, many=True).data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=["post"])
     def bulk_delete(self, request):
@@ -211,3 +252,36 @@ class HealthView(APIView):
     def get(self, request):
         Account.objects.exists()  # real query against a real table
         return Response({"status": "ok"})
+
+
+class VapidPublicKeyView(APIView):
+    """The public key is, by design, safe to hand to anyone — the browser
+    needs it to create a push subscription. Only the private key (used to
+    actually sign outgoing pushes) stays secret, server-side only."""
+
+    def get(self, request):
+        from django.conf import settings
+
+        return Response({"publicKey": settings.VAPID_PUBLIC_KEY})
+
+
+class PushSubscriptionViewSet(UserScopedViewSet):
+    queryset = PushSubscription.objects.all()
+    serializer_class = PushSubscriptionSerializer
+
+    def create(self, request, *args, **kwargs):
+        # Upsert by endpoint: re-subscribing the same browser updates its
+        # keys instead of erroring on the unique constraint.
+        endpoint = request.data.get("endpoint")
+        obj, _ = PushSubscription.objects.update_or_create(
+            user=request.user,
+            endpoint=endpoint,
+            defaults={"p256dh": request.data.get("p256dh", ""), "auth": request.data.get("auth", "")},
+        )
+        return Response(self.get_serializer(obj).data, status=201)
+
+    @action(detail=False, methods=["post"])
+    def unsubscribe(self, request):
+        endpoint = request.data.get("endpoint")
+        PushSubscription.objects.filter(user=request.user, endpoint=endpoint).delete()
+        return Response(status=204)

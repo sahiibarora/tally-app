@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Account, Budget, Category, Entry, Goal, Preference
+from .models import Account, Budget, Category, Entry, Goal, Preference, PushSubscription
 
 
 class AccountSerializer(serializers.ModelSerializer):
@@ -45,3 +45,10 @@ class PreferenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = Preference
         fields = ["theme", "dismissed_alerts"]
+
+
+class PushSubscriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PushSubscription
+        fields = ["id", "endpoint", "p256dh", "auth"]
+        read_only_fields = ["id"]

@@ -3,3 +3,8 @@ __pycache__/
 *.pyc
 .env
 venv/
+
+# build/dependency output that should never be committed
+node_modules/
+frontend_source/dist/
+staticfiles/
