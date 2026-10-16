@@ -1,20 +1,24 @@
 name: Keep Tally awake
 
-# Supabase's free tier pauses the database after ~7 days without activity, and
-# Render's free tier sleeps the server when idle. Calling /api/health/ (which
-# runs a real database query) every 2 days keeps the database from pausing.
+# Supabase pauses a free database that gets no activity for about a week, and
+# its docs ask for a few requests per day. This calls /api/health/ (which runs
+# a real database query through the app) every 6 hours.
 on:
   schedule:
-    - cron: "0 6 */2 * *"   # every 2 days at 06:00 UTC
+    - cron: "0 */6 * * *"   # 00:00, 06:00, 12:00 and 18:00 UTC
   workflow_dispatch: {}      # lets you run it by hand from the Actions tab
 
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Ping the app (retries while Render wakes up)
         run: |
           curl --fail --silent --show-error \
             --max-time 120 \
             --retry 6 --retry-delay 20 --retry-all-errors \
+            --output response.json \
             https://tally-app-knot.onrender.com/api/health/
+          cat response.json
+          grep -q '"status":"ok"' response.json
