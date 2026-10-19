@@ -33,6 +33,7 @@ def send_push_to_user(user, title, body, tag=None):
                 data=payload,
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims={"sub": settings.VAPID_CLAIM_EMAIL},
+                timeout=3,  # saving an expense must never wait long on a push service
             )
         except WebPushException as e:
             status_code = getattr(e.response, "status_code", None)

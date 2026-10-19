@@ -5,7 +5,7 @@ import { Fingerprint, Delete } from "lucide-react";
 // up your phone while Tally is open or in the background. It does NOT replace
 // your real email + password login (that lives on the server), and like any
 // app-lock it isn't designed to stop someone with deep access to the phone's
-// storage — it's a screen lock, same idea as the lock in a banking app.
+// storage. It's a screen lock, same idea as the lock in a banking app.
 
 const PIN_HASH_KEY = "tally-pin-hash";
 const PIN_SALT_KEY = "tally-pin-salt";
@@ -189,11 +189,11 @@ export function LockScreen({ onUnlock, onForgot }) {
       </div>
       <div className="grid grid-cols-3 gap-4 mb-4" style={{ opacity: secondsLeft > 0 ? 0.4 : 1 }}>
         {["1", "2", "3", "4", "5", "6", "7", "8", "9"].map((d) => (
-          <button key={d} onClick={() => press(d)} aria-label={d} style={btn} className="w-16 h-16 rounded-full text-xl font-medium active:opacity-70">{d}</button>
+          <button key={d} onClick={() => press(d)} aria-label={d} style={btn} className="w-16 h-16 rounded-xl text-xl font-medium active:opacity-70">{d}</button>
         ))}
         <div />
-        <button onClick={() => press("0")} aria-label="0" style={btn} className="w-16 h-16 rounded-full text-xl font-medium active:opacity-70">0</button>
-        <button onClick={() => setDigits((d) => d.slice(0, -1))} aria-label="Delete last digit" style={{ color: T.inkSoft }} className="w-16 h-16 rounded-full flex items-center justify-center active:opacity-70">
+        <button onClick={() => press("0")} aria-label="0" style={btn} className="w-16 h-16 rounded-xl text-xl font-medium active:opacity-70">0</button>
+        <button onClick={() => setDigits((d) => d.slice(0, -1))} aria-label="Delete last digit" style={{ color: T.inkSoft }} className="w-16 h-16 rounded-xl flex items-center justify-center active:opacity-70">
           <Delete size={20} aria-hidden="true" />
         </button>
       </div>
@@ -287,17 +287,25 @@ export function LockSettings({ C }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <span style={{ color: C.ink }} className="text-sm">App lock</span>
-        <button
-          onClick={() => (enabled ? turnOff() : startSetup())}
-          role="switch"
-          aria-checked={enabled}
-          aria-label="App lock"
-          style={{ background: enabled ? C.sage : C.line }}
-          className="relative w-10 h-6 rounded-full transition-colors focus:outline-none"
-        >
-          <span style={{ transform: enabled ? "translateX(18px)" : "translateX(2px)", background: "#fff" }} className="absolute top-1 w-4 h-4 rounded-full transition-transform" />
-        </button>
+        <span id="app-lock-label" style={{ color: C.ink }} className="text-sm">App lock</span>
+        <div role="group" aria-labelledby="app-lock-label" style={{ border: `1px solid ${C.line}`, background: C.paper }} className="inline-flex rounded-lg p-0.5">
+          <button
+            onClick={() => enabled && turnOff()}
+            aria-pressed={!enabled && !settingPin}
+            style={!enabled && !settingPin ? { background: C.ink, color: C.paper } : { color: C.inkSoft }}
+            className="ft-focus text-xs font-medium px-3 py-1 rounded-md focus:outline-none"
+          >
+            Off
+          </button>
+          <button
+            onClick={() => !enabled && !settingPin && startSetup()}
+            aria-pressed={enabled || settingPin}
+            style={enabled || settingPin ? { background: C.ink, color: C.paper } : { color: C.inkSoft }}
+            className="ft-focus text-xs font-medium px-3 py-1 rounded-md focus:outline-none"
+          >
+            On
+          </button>
+        </div>
       </div>
       <p style={{ color: C.inkSoft }} className="text-xs mb-3">
         Ask for a PIN (or Face ID / Touch ID) every time you open Tally or come back to it. This lock is per device.

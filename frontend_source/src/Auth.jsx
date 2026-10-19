@@ -77,7 +77,7 @@ export function ResetPasswordScreen({ uid, token, onDone }) {
   if (done) {
     return (
       <Shell title="Password updated">
-        <p style={{ color: TOKENS.sage }} className="text-sm">You're all set — taking you in now…</p>
+        <p style={{ color: TOKENS.sage }} className="text-sm">You're all set. Taking you in now…</p>
       </Shell>
     );
   }
@@ -132,8 +132,12 @@ export default function Auth({ onAuthed }) {
     if (!email.trim()) return setError("Enter your email first.");
     setBusy(true);
     try {
-      await api.requestPasswordReset(email.trim());
-      setForgotSent(true);
+      const result = await api.requestPasswordReset(email.trim());
+      if (result && result.delivery === "unavailable") {
+        setError("Password reset emails are not set up for this app yet, so none can be sent. Please contact the app owner.");
+      } else {
+        setForgotSent(true);
+      }
     } catch (err) {
       setError(err.message || "Something went wrong.");
     } finally {
@@ -147,7 +151,7 @@ export default function Auth({ onAuthed }) {
         {forgotSent ? (
           <div>
             <p style={{ color: TOKENS.sage }} className="text-sm mb-4">
-              If that email has an account, a reset link is on its way — check your inbox (and spam folder).
+              If that email has an account, a reset link is on its way. Check your inbox and your spam folder.
             </p>
             <button onClick={() => { setMode("login"); setForgotSent(false); }} style={{ color: TOKENS.sage }} className={linkBtn}>
               Back to log in

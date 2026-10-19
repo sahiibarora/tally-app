@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
@@ -121,7 +122,15 @@ class PasswordResetRequestView(APIView):
                 # Never tell the caller (that would reveal the account exists),
                 # but do record it so a broken email setup is findable in logs.
                 logger.exception("Password reset email failed to send")
-        return Response({"detail": "If that email has an account, a reset link has been sent."})
+        # "delivery" describes the server's email setup, not the account, so it
+        # leaks nothing about who has one. It lets the app say so plainly when
+        # email is not configured instead of promising an email that can't arrive.
+        return Response(
+            {
+                "detail": "If that email has an account, a reset link has been sent.",
+                "delivery": "email" if settings.EMAIL_HOST else "unavailable",
+            }
+        )
 
 
 class PasswordResetConfirmView(APIView):

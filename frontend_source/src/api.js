@@ -93,5 +93,6 @@ export const api = {
 
   getVapidPublicKey: (token) => request("/vapid-public-key/", { token }),
   subscribePush: (token, sub) => request("/push-subscriptions/", { method: "POST", token, body: sub }),
+  sendTestPush: (token) => request("/push-subscriptions/test/", { method: "POST", token, body: {} }),
   unsubscribePush: (token, endpoint) => request("/push-subscriptions/unsubscribe/", { method: "POST", token, body: { endpoint } }),
 };

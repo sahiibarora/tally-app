@@ -1,4 +1,4 @@
-// Tally service worker — enables real push notifications (the app doesn't
+// Tally service worker: enables real push notifications (the app doesn't
 // need to be open for these to arrive) and a minimal offline fallback.
 
 self.addEventListener("install", (event) => {

@@ -192,3 +192,26 @@ class RecurringValidationTests(FinanceTestCase):
             format="json",
         )
         self.assertEqual(r.status_code, 400)
+
+
+class TestNotificationEndpointTests(FinanceTestCase):
+    def test_without_server_keys_it_says_not_configured(self):
+        r = self.client.post("/api/push-subscriptions/test/", {}, format="json")
+        self.assertEqual((r.status_code, r.data), (200, {"configured": False, "devices": 0}))
+
+    @mock.patch("finance.views.send_push_to_user")
+    def test_sends_only_when_configured_and_subscribed(self, send):
+        with self.settings(VAPID_PUBLIC_KEY="pub", VAPID_PRIVATE_KEY="priv"):
+            self.client.post("/api/push-subscriptions/test/", {}, format="json")
+            self.assertEqual(send.call_count, 0)  # no device yet
+            PushSubscription.objects.create(user=self.user, endpoint="https://push.example/1", p256dh="k", auth="a")
+            r = self.client.post("/api/push-subscriptions/test/", {}, format="json")
+        self.assertEqual(r.data, {"configured": True, "devices": 1})
+        self.assertEqual(send.call_count, 1)
+
+    def test_requires_login_and_is_rate_limited(self):
+        codes = [self.client.post("/api/push-subscriptions/test/", {}, format="json").status_code for _ in range(7)]
+        self.assertEqual(codes[:5], [200] * 5)
+        self.assertEqual(codes[-1], 429)
+        self.client.credentials()
+        self.assertEqual(self.client.post("/api/push-subscriptions/test/", {}, format="json").status_code, 401)

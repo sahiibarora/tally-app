@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .models import Account, Budget, Category, Entry, Goal, Preference, PushSubscription
-from .push import check_and_notify_budget
+from .push import check_and_notify_budget, send_push_to_user
 from .serializers import (
     AccountSerializer,
     BudgetSerializer,
@@ -268,6 +268,7 @@ class VapidPublicKeyView(APIView):
 class PushSubscriptionViewSet(UserScopedViewSet):
     queryset = PushSubscription.objects.all()
     serializer_class = PushSubscriptionSerializer
+    throttle_scope = None  # declared so individual actions can set their own (see `test`)
 
     def create(self, request, *args, **kwargs):
         # Upsert by endpoint: re-subscribing the same browser updates its
@@ -279,6 +280,18 @@ class PushSubscriptionViewSet(UserScopedViewSet):
             defaults={"p256dh": request.data.get("p256dh", ""), "auth": request.data.get("auth", "")},
         )
         return Response(self.get_serializer(obj).data, status=201)
+
+    @action(detail=False, methods=["post"], throttle_scope="push_test")
+    def test(self, request):
+        """Sends one test notification to the caller's own devices, so they can
+        confirm alerts work without having to set up a budget first."""
+        from django.conf import settings
+
+        configured = bool(settings.VAPID_PRIVATE_KEY and settings.VAPID_PUBLIC_KEY)
+        devices = PushSubscription.objects.filter(user=request.user).count()
+        if configured and devices:
+            send_push_to_user(request.user, "Tally", "Test notification. Alerts are working on this device.", tag="tally-test")
+        return Response({"configured": configured, "devices": devices})
 
     @action(detail=False, methods=["post"])
     def unsubscribe(self, request):

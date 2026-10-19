@@ -143,6 +143,7 @@ REST_FRAMEWORK = {
         "auth": "5/min",                 # per IP address, signup + login
         "password_reset": "3/min",       # per IP address
         "login_email": "10/hour",        # per email address being tried
+        "push_test": "5/min",            # test-notification button
     },
 }
 

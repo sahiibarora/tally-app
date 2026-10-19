@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import Auth, { ResetPasswordScreen } from "./Auth";
 import { api } from "./api";
-import { LockScreen, LockSettings, isLockEnabled, disableLock } from "./AppLock";
+import { LockScreen, isLockEnabled, disableLock } from "./AppLock";
+import SecurityDialog from "./SecurityDialog";
 
 const LIGHT = {
   paper: "#F7F4EE", card: "#FFFFFF", ink: "#2B2A27", inkSoft: "#635E56", line: "#E5DFD3",
@@ -49,6 +50,10 @@ function buildGlobalStyles(C) {
     .ft-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
     @keyframes ft-pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
     .ft-skeleton { animation: ft-pulse 1.6s ease-in-out infinite; background: ${C.line}; border-radius: 8px; }
+    @media (prefers-reduced-motion: reduce) {
+      .ft-skeleton { animation: none; }
+      * { transition: none !important; }
+    }
   `;
 }
 
@@ -98,7 +103,7 @@ function rangeLabel(view, refDate) {
     const sameMonth = start.getMonth() === end.getMonth();
     const s = start.toLocaleDateString("en-IN", { day: "numeric", month: sameMonth ? undefined : "short" });
     const e = end.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-    return `${s} \u2013 ${e}`;
+    return `${s} to ${e}`;
   }
   return start.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 }
@@ -254,6 +259,8 @@ function Tracker({ session, onLogout, onNameChange }) {
   const [mode, setMode] = useState("light");
   const [dismissedAlerts, setDismissedAlerts] = useState(new Set());
 
+  const [securityOpen, setSecurityOpen] = useState(false);
+  const securityBtnRef = useRef(null);
   const [notifStatus, setNotifStatus] = useState("default"); // default | granted | denied | unsupported
   const [notifBusy, setNotifBusy] = useState(false);
   const [notifError, setNotifError] = useState("");
@@ -261,7 +268,7 @@ function Tracker({ session, onLogout, onNameChange }) {
   const C = mode === "dark" ? DARK : LIGHT;
   const now = useMemo(() => new Date(), []);
 
-  // Register the service worker once on load — it's what lets a push
+  // Register the service worker once on load. It's what lets a push
   // notification arrive even when the app isn't open. Subscribing to actual
   // pushes only happens when the user taps "Enable" (handleEnableNotifications).
   useEffect(() => {
@@ -298,7 +305,7 @@ function Tracker({ session, onLogout, onNameChange }) {
       const json = sub.toJSON();
       await api.subscribePush(token, { endpoint: json.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth });
     } catch (e) {
-      // Non-fatal — the in-app banner still works even if push setup fails.
+      // Non-fatal: the in-app banner still works even if push setup fails.
     }
   }
 
@@ -428,7 +435,7 @@ function Tracker({ session, onLogout, onNameChange }) {
     }
   }
 
-  // ---------- categories (immediate persist — fixes the "not selectable" bug) ----------
+  // ---------- categories (saved immediately, so new ones are selectable right away) ----------
   const [editingCategories, setEditingCategories] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState({ expense: "", income: "" });
   const [categoryError, setCategoryError] = useState("");
@@ -614,7 +621,7 @@ function Tracker({ session, onLogout, onNameChange }) {
       const pct = Math.round((Math.abs(topMover.delta) / topMover.prev) * 100);
       list.push(topMover.delta > 0
         ? `${topMover.cat} spending is up ${pct}% vs last month (${fmtMoney(topMover.delta)} more).`
-        : `${topMover.cat} spending is down ${pct}% vs last month — nice work.`);
+        : `${topMover.cat} spending is down ${pct}% vs last month. Nice work.`);
     }
     if (periodEntries.length > 0) {
       const biggest = [...periodEntries].sort((a, b) => b.amount - a.amount)[0];
@@ -780,7 +787,7 @@ function Tracker({ session, onLogout, onNameChange }) {
 <body style="font-family:-apple-system,sans-serif;background:#F7F4EE;color:#2B2A27;padding:32px;max-width:560px;margin:0 auto;">
 <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:#635E56;margin-bottom:8px;">Read-only snapshot &middot; ${escapeHTML(session.name)}'s Tally</div>
 <h1 style="font-family:Georgia,serif;font-size:28px;margin:0 0 4px;">${escapeHTML(rangeLabel(view, refDate))}</h1>
-<p style="color:#635E56;font-size:13px;margin:0 0 24px;">Generated ${escapeHTML(new Date().toLocaleString("en-IN"))}. Static file — does not update, cannot be edited.</p>
+<p style="color:#635E56;font-size:13px;margin:0 0 24px;">Generated ${escapeHTML(new Date().toLocaleString("en-IN"))}. This is a static file. It does not update and cannot be edited.</p>
 <div style="display:flex;gap:12px;margin-bottom:24px;">
   <div style="flex:1;background:#E7EEE6;border-radius:12px;padding:12px;"><div style="font-size:12px;color:#635E56;">Money In</div><div style="font-size:18px;font-family:Georgia,serif;color:#3F5E48;">${escapeHTML(fmtMoney(totalIn))}</div></div>
   <div style="flex:1;background:#F6E7E0;border-radius:12px;padding:12px;"><div style="font-size:12px;color:#635E56;">Money Out</div><div style="font-size:18px;font-family:Georgia,serif;color:#96432B;">${escapeHTML(fmtMoney(totalOut))}</div></div>
@@ -825,6 +832,21 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
     <div style={{ background: C.paper, fontFamily: FONTS.bodyFont, color: C.ink, minHeight: "100vh", overflowX: "hidden" }} className="w-full">
       <style>{buildGlobalStyles(C)}</style>
 
+      {securityOpen && (
+        <SecurityDialog
+          C={C}
+          token={token}
+          notifStatus={notifStatus}
+          notifBusy={notifBusy}
+          notifError={notifError}
+          onEnableNotifications={handleEnableNotifications}
+          onClose={() => {
+            setSecurityOpen(false);
+            setTimeout(() => securityBtnRef.current && securityBtnRef.current.focus(), 0);
+          }}
+        />
+      )}
+
       {/* Undo toasts */}
       <div className="fixed bottom-4 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-50 w-full max-w-sm px-4">
         {toasts.map((t) => (
@@ -862,13 +884,18 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
 
       <div className="max-w-3xl mx-auto px-4 py-8 sm:px-6">
         <div className="flex items-start justify-end gap-2 mb-6">
+          <button ref={securityBtnRef} onClick={() => setSecurityOpen(true)} aria-label="Security and notifications" aria-haspopup="dialog" aria-expanded={securityOpen}
+            style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }}
+            className="ft-focus p-2 rounded-lg hover:opacity-80 transition-opacity focus:outline-none">
+            <ShieldCheck size={16} aria-hidden="true" />
+          </button>
           <button onClick={toggleMode} aria-pressed={mode === "dark"} aria-label={mode === "dark" ? "Switch to light mode" : "Switch to dark mode"}
             style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }}
-            className="ft-focus p-2 rounded-full hover:opacity-80 transition-opacity focus:outline-none">
+            className="ft-focus p-2 rounded-lg hover:opacity-80 transition-opacity focus:outline-none">
             {mode === "dark" ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
           </button>
           <button onClick={handleLogoutClick} aria-label="Log out" style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }}
-            className="ft-focus p-2 rounded-full hover:opacity-80 transition-opacity focus:outline-none">
+            className="ft-focus p-2 rounded-lg hover:opacity-80 transition-opacity focus:outline-none">
             <LogOut size={16} aria-hidden="true" />
           </button>
           <Logo C={C} />
@@ -889,8 +916,8 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
             <div className="flex items-end flex-wrap gap-x-4 gap-y-2">
               <div style={{ fontFamily: FONTS.displayFont, color: C.ink, lineHeight: 1 }} className="text-5xl sm:text-6xl">{fmtMoney(allTimeBalance)}</div>
               <div className="flex gap-2 mb-1">
-                <span style={{ background: C.sageSoft, color: C.sage }} className="text-xs font-medium px-2 py-1 rounded-full">In {fmtMoney(allTimeIn)}</span>
-                <span style={{ background: C.claySoft, color: C.clay }} className="text-xs font-medium px-2 py-1 rounded-full">Out {fmtMoney(allTimeOut)}</span>
+                <span style={{ background: C.sageSoft, color: C.sage }} className="text-xs font-medium px-2 py-1 rounded-md">In {fmtMoney(allTimeIn)}</span>
+                <span style={{ background: C.claySoft, color: C.clay }} className="text-xs font-medium px-2 py-1 rounded-md">Out {fmtMoney(allTimeOut)}</span>
               </div>
             </div>
           )}
@@ -928,11 +955,11 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
               <div role="tablist" aria-label="Account" className="flex items-center gap-1.5 flex-wrap">
                 <button role="tab" aria-selected={selectedAccountId === "all"} onClick={() => setSelectedAccountId("all")}
                   style={selectedAccountId === "all" ? { background: C.ink, color: C.paper } : { background: C.card, color: C.inkSoft, border: `1px solid ${C.line}` }}
-                  className="ft-focus text-xs font-medium px-3 py-1.5 rounded-full focus:outline-none">All accounts</button>
+                  className="ft-focus text-xs font-medium px-3 py-1.5 rounded-lg focus:outline-none">All accounts</button>
                 {accounts.map((a) => (
                   <button key={a.id} role="tab" aria-selected={selectedAccountId === a.id} onClick={() => setSelectedAccountId(a.id)}
                     style={selectedAccountId === a.id ? { background: C.ink, color: C.paper } : { background: C.card, color: C.inkSoft, border: `1px solid ${C.line}` }}
-                    className="ft-focus text-xs font-medium px-3 py-1.5 rounded-full focus:outline-none">{a.name}</button>
+                    className="ft-focus text-xs font-medium px-3 py-1.5 rounded-lg focus:outline-none">{a.name}</button>
                 ))}
               </div>
               <button onClick={openAccountsEdit} aria-label="Manage accounts" style={{ color: C.inkSoft }} className="ft-focus flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg hover:opacity-70 focus:outline-none">
@@ -1019,11 +1046,11 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
                 <div className="flex items-center gap-2"><Target size={15} style={{ color: C.sage }} aria-hidden="true" /><h2 className="text-sm font-semibold">{goal.name}</h2></div>
                 <button onClick={openGoalEdit} aria-label={`Edit ${goal.name} goal`} style={{ color: C.inkSoft }} className="ft-focus p-1 rounded-md hover:opacity-70 focus:outline-none"><Pencil size={14} aria-hidden="true" /></button>
               </div>
-              <div role="progressbar" aria-valuenow={goalPct} aria-valuemin={0} aria-valuemax={100} aria-label={`${goal.name} progress: ${goalPct}%`} style={{ background: C.paper }} className="w-full h-3 rounded-full overflow-hidden mb-2">
-                <div aria-hidden="true" style={{ width: `${goalPct}%`, background: goalReached ? C.sage : C.clay }} className="h-full rounded-full transition-all" />
+              <div role="progressbar" aria-valuenow={goalPct} aria-valuemin={0} aria-valuemax={100} aria-label={`${goal.name} progress: ${goalPct}%`} style={{ background: C.paper }} className="w-full h-3 rounded overflow-hidden mb-2">
+                <div aria-hidden="true" style={{ width: `${goalPct}%`, background: goalReached ? C.sage : C.clay }} className="h-full rounded transition-all" />
               </div>
               <div className="flex items-center justify-between flex-wrap gap-1">
-                <span style={{ color: C.inkSoft }} className="text-xs">{fmtMoney(Math.max(globalBalance, 0))} of {fmtMoney(goal.target)} ({goalPct}%) — across all accounts</span>
+                <span style={{ color: C.inkSoft }} className="text-xs">{fmtMoney(Math.max(globalBalance, 0))} of {fmtMoney(goal.target)} ({goalPct}%) across all accounts</span>
                 <span style={{ color: goalReached ? C.sage : C.inkSoft }} className="text-xs font-medium">{goalReached ? "Goal reached" : `${fmtMoney(goalRemaining)} to go`}</span>
               </div>
             </div>
@@ -1065,8 +1092,8 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
                           <span style={{ color: C.ink }} className="text-sm">{b.category}</span>
                           <span style={{ color: b.state === "over" ? C.clay : C.inkSoft }} className="text-xs">{fmtMoney(b.spent)} / {fmtMoney(b.limit)} ({pct}%)</span>
                         </div>
-                        <div role="progressbar" aria-valuenow={Math.min(pct, 100)} aria-valuemin={0} aria-valuemax={100} aria-label={`${b.category} budget: ${pct}% used`} style={{ background: C.paper }} className="w-full h-2.5 rounded-full overflow-hidden">
-                          <div aria-hidden="true" style={{ width: `${Math.min(pct, 100)}%`, background: barColor }} className="h-full rounded-full transition-all" />
+                        <div role="progressbar" aria-valuenow={Math.min(pct, 100)} aria-valuemin={0} aria-valuemax={100} aria-label={`${b.category} budget: ${pct}% used`} style={{ background: C.paper }} className="w-full h-2.5 rounded overflow-hidden">
+                          <div aria-hidden="true" style={{ width: `${Math.min(pct, 100)}%`, background: barColor }} className="h-full rounded transition-all" />
                         </div>
                       </li>
                     );
@@ -1104,7 +1131,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
                 ))}
               </div>
               {categoryError && <div role="alert" style={{ color: C.clay }} className="text-xs mb-3">{categoryError}</div>}
-              <p style={{ color: C.inkSoft }} className="text-xs mb-3">Changes here apply right away — new categories are ready to pick as soon as you add them.</p>
+              <p style={{ color: C.inkSoft }} className="text-xs mb-3">Changes here apply right away. New categories are ready to pick as soon as you add them.</p>
               <button onClick={() => setEditingCategories(false)} style={{ background: C.ink, color: C.paper }} className="ft-focus text-sm font-medium px-4 py-2 rounded-lg hover:opacity-90 focus:outline-none">Done</button>
             </div>
           ) : (
@@ -1116,32 +1143,6 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
               <button onClick={openCategoriesEdit} style={{ color: C.inkSoft, border: `1px solid ${C.line}` }} className="ft-focus flex items-center gap-1 text-xs font-medium px-2.5 py-1.5 rounded-lg hover:opacity-70 focus:outline-none"><Pencil size={12} aria-hidden="true" /> Manage</button>
             </div>
           )}
-        </div>
-
-        {/* Security & notifications */}
-        <div style={{ background: C.card, border: `1px solid ${C.line}` }} className="rounded-xl p-5 mb-6">
-          <div className="flex items-center gap-2 mb-4">
-            <ShieldCheck size={15} style={{ color: C.sage }} aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Security &amp; notifications</h2>
-          </div>
-          <LockSettings C={C} />
-          <div style={{ borderTop: `1px solid ${C.line}` }} className="mt-4 pt-4">
-            <div className="flex items-center justify-between mb-1">
-              <span style={{ color: C.ink }} className="text-sm">Budget alerts</span>
-              <button
-                onClick={notifStatus === "granted" ? undefined : handleEnableNotifications}
-                disabled={notifStatus === "granted" || notifBusy || notifStatus === "unsupported"}
-                style={{ color: notifStatus === "granted" ? C.sage : C.sage }}
-                className="ft-focus text-xs font-medium underline underline-offset-2 focus:outline-none disabled:no-underline disabled:opacity-80"
-              >
-                {notifStatus === "granted" ? "Enabled" : notifStatus === "denied" ? "Blocked in browser settings" : notifStatus === "unsupported" ? "Not supported here" : notifBusy ? "Enabling…" : "Enable"}
-              </button>
-            </div>
-            <p style={{ color: C.inkSoft }} className="text-xs">
-              Get a real phone notification the moment a budget crosses 80% or goes over — even if the app isn't open.
-            </p>
-            {notifError && <div role="alert" style={{ color: C.clay }} className="text-xs mt-1">{notifError}</div>}
-          </div>
         </div>
 
         {/* Trends */}
@@ -1176,12 +1177,12 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
         </div>
 
         <div className="flex items-center justify-between mb-6">
-          <button aria-label="Previous period" onClick={() => setRefDate(shiftRef(view, refDate, -1))} style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} className="ft-focus p-2 rounded-full hover:opacity-70 focus:outline-none"><ChevronLeft size={16} aria-hidden="true" /></button>
+          <button aria-label="Previous period" onClick={() => setRefDate(shiftRef(view, refDate, -1))} style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} className="ft-focus p-2 rounded-lg hover:opacity-70 focus:outline-none"><ChevronLeft size={16} aria-hidden="true" /></button>
           <div className="flex items-baseline gap-3">
             <span aria-live="polite" className="text-sm font-medium">{rangeLabel(view, refDate)}</span>
             <button onClick={() => setRefDate(new Date())} style={{ color: C.sage }} className="ft-focus text-xs font-medium underline underline-offset-2 hover:opacity-70 focus:outline-none">Today</button>
           </div>
-          <button aria-label="Next period" onClick={() => setRefDate(shiftRef(view, refDate, 1))} style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} className="ft-focus p-2 rounded-full hover:opacity-70 focus:outline-none"><ChevronRight size={16} aria-hidden="true" /></button>
+          <button aria-label="Next period" onClick={() => setRefDate(shiftRef(view, refDate, 1))} style={{ border: `1px solid ${C.line}`, background: C.card, color: C.ink }} className="ft-focus p-2 rounded-lg hover:opacity-70 focus:outline-none"><ChevronRight size={16} aria-hidden="true" /></button>
         </div>
 
         <div className="grid grid-cols-3 gap-3 mb-6">
@@ -1202,7 +1203,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
               {categoryTotals.map((c) => (
                 <li key={c.category} className="flex items-center gap-3">
                   <div style={{ color: C.ink }} className="text-sm w-24 shrink-0 truncate">{c.category}</div>
-                  <div style={{ background: C.paper }} className="flex-1 h-3 rounded-full overflow-hidden"><div aria-hidden="true" style={{ width: `${maxCategory ? (c.amount / maxCategory) * 100 : 0}%`, background: categoryColor(c.category) }} className="h-full rounded-full transition-all" /></div>
+                  <div style={{ background: C.paper }} className="flex-1 h-3 rounded overflow-hidden"><div aria-hidden="true" style={{ width: `${maxCategory ? (c.amount / maxCategory) * 100 : 0}%`, background: categoryColor(c.category) }} className="h-full rounded transition-all" /></div>
                   <div style={{ color: C.inkSoft }} className="text-sm w-20 shrink-0 text-right">{fmtMoney(c.amount)}</div>
                 </li>
               ))}
@@ -1237,7 +1238,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
             <div className="flex items-center justify-between mb-4"><h2 className="text-sm font-semibold">{editingId ? "Edit entry" : "Add entry"}</h2><button onClick={closeForm} aria-label="Close" style={{ color: C.inkSoft }} className="ft-focus hover:opacity-70 focus:outline-none"><X size={18} aria-hidden="true" /></button></div>
             <div role="group" aria-label="Entry type" className="flex gap-2 mb-4">
               {["expense", "income"].map((t) => (
-                <button key={t} aria-pressed={form.type === t} onClick={() => onTypeChange(t)} style={form.type === t ? { background: t === "income" ? C.sage : C.clay, color: "#fff" } : { background: C.paper, color: C.inkSoft, border: `1px solid ${C.line}` }} className="ft-focus text-sm font-medium px-4 py-1.5 rounded-full capitalize focus:outline-none">{t}</button>
+                <button key={t} aria-pressed={form.type === t} onClick={() => onTypeChange(t)} style={form.type === t ? { background: t === "income" ? C.sage : C.clay, color: "#fff" } : { background: C.paper, color: C.inkSoft, border: `1px solid ${C.line}` }} className="ft-focus text-sm font-medium px-4 py-1.5 rounded-lg capitalize focus:outline-none">{t}</button>
               ))}
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
@@ -1250,7 +1251,7 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
                 <Field label="Repeat" C={C}><select value={form.repeat} onChange={(e) => setForm((f) => ({ ...f, repeat: e.target.value }))} style={{ border: `1px solid ${C.line}`, color: C.ink, background: C.card }} className="ft-focus w-full text-sm px-3 py-2 rounded-lg focus:outline-none">{REPEAT_OPTIONS.map((o) => (<option key={o.value} value={o.value}>{o.label}</option>))}</select></Field>
               )}
             </div>
-            {editingId && editingRecurring && (<div style={{ color: C.inkSoft }} className="flex items-center gap-1.5 text-xs mb-3"><Repeat size={12} aria-hidden="true" />Part of a {editingRecurring} series — this change only affects this occurrence.</div>)}
+            {editingId && editingRecurring && (<div style={{ color: C.inkSoft }} className="flex items-center gap-1.5 text-xs mb-3"><Repeat size={12} aria-hidden="true" />Part of a {editingRecurring} series. This change only affects this occurrence.</div>)}
             {formError && <div role="alert" style={{ color: C.clay }} className="text-xs mb-3">{formError}</div>}
             <div className="flex gap-2">
               <button onClick={submitForm} disabled={submittingForm} style={{ background: C.ink, color: C.paper }} className="ft-focus text-sm font-medium px-4 py-2 rounded-lg hover:opacity-90 focus:outline-none disabled:opacity-60">{submittingForm ? "Saving…" : editingId ? "Save changes" : "Add entry"}</button>
@@ -1302,11 +1303,11 @@ ${rows || '<p style="color:#635E56;font-size:13px;">No expenses in this period.<
                 {selectMode && (<input type="checkbox" className="ft-focus shrink-0" checked={selectedIds.has(e.id)} onChange={() => toggleSelect(e.id)} aria-label={`Select entry: ${e.category}, ${fmtMoney(e.amount)} on ${fmtEntryDate(e.date)}`} />)}
                 <div style={{ color: C.inkSoft }} className="text-xs w-20 shrink-0">{fmtEntryDate(e.date)}</div>
                 {e.recurring && (<span title={`Repeats ${e.recurring}`} aria-label={`Repeats ${e.recurring}`} style={{ color: C.inkSoft }} className="shrink-0"><Repeat size={13} /></span>)}
-                <span style={{ background: `${categoryColor(e.category)}1A`, color: C.ink }} className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full shrink-0">
+                <span style={{ background: `${categoryColor(e.category)}1A`, color: C.ink }} className="flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md shrink-0">
                   <span aria-hidden="true" style={{ background: categoryColor(e.category), width: 7, height: 7, borderRadius: "50%", display: "inline-block" }} />{e.category}
                 </span>
                 {selectedAccountId === "all" && accounts.length > 1 && (<span style={{ color: C.inkSoft }} className="text-xs shrink-0 hidden sm:inline">{accounts.find((a) => a.id === e.accountId)?.name || ""}</span>)}
-                <div className="text-sm flex-1 truncate min-w-0" style={{ color: e.note ? C.ink : C.inkSoft }}>{e.note || "—"}</div>
+                <div className="text-sm flex-1 truncate min-w-0" style={{ color: e.note ? C.ink : C.inkSoft }}>{e.note || "No note"}</div>
                 <div style={{ color: e.type === "income" ? C.sage : C.clay }} className="text-sm font-semibold shrink-0">
                   <span className="ft-sr-only">{e.type === "income" ? "Income" : "Expense"}</span>{e.type === "income" ? "+" : "-"}{fmtMoney(e.amount)}
                 </div>

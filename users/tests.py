@@ -103,3 +103,23 @@ class AuthTests(APITestCase):
         tok = default_token_generator.make_token(user)
         self.client.post("/api/auth/password-reset/confirm/", {"uid": uid, "token": tok, "new_password": "BrandNewPass456"}, format="json")
         self.assertFalse(Token.objects.filter(key=old_token).exists())
+
+
+class ResetDeliveryFlagTests(APITestCase):
+    def setUp(self):
+        cache.clear()
+
+    def test_reports_when_email_is_not_set_up(self):
+        r = self.client.post("/api/auth/password-reset/request/", {"email": "a@example.com"}, format="json")
+        self.assertEqual(r.data["delivery"], "unavailable")
+
+    def test_reports_email_when_configured_and_is_identical_for_unknown_accounts(self):
+        from django.test import override_settings
+
+        with override_settings(EMAIL_HOST="smtp.example.com"):
+            unknown = self.client.post("/api/auth/password-reset/request/", {"email": "ghost@example.com"}, format="json")
+            cache.clear()
+            User.objects.create_user("real@example.com", "real@example.com", "GoodPass123")
+            known = self.client.post("/api/auth/password-reset/request/", {"email": "real@example.com"}, format="json")
+        self.assertEqual(unknown.data, known.data)
+        self.assertEqual(known.data["delivery"], "email")
