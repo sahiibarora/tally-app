@@ -4,7 +4,6 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.contrib.auth.tokens import default_token_generator
-from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -16,6 +15,7 @@ from rest_framework.views import APIView
 from finance.defaults import DEFAULT_EXPENSE_CATEGORIES, DEFAULT_INCOME_CATEGORIES
 from finance.models import Account, Category, Goal, Preference
 
+from .mailing import send_email_in_background
 from .throttles import LoginEmailThrottle
 from .serializers import (
     LoginSerializer,
@@ -106,29 +106,23 @@ class PasswordResetRequestView(APIView):
             uid = urlsafe_base64_encode(force_bytes(user.pk))
             token = default_token_generator.make_token(user)
             reset_url = f"{request.scheme}://{request.get_host()}/?reset_uid={uid}&reset_token={token}"
-            try:
-                send_mail(
-                    subject="Reset your Tally password",
-                    message=(
-                        f"Hi {user.first_name or ''},\n\n"
-                        f"Click the link below to set a new password for Tally. "
-                        f"This link works once and expires soon.\n\n{reset_url}\n\n"
-                        f"If you didn't request this, you can safely ignore this email."
-                    ),
-                    from_email=None,
-                    recipient_list=[user.email],
-                )
-            except Exception:
-                # Never tell the caller (that would reveal the account exists),
-                # but do record it so a broken email setup is findable in logs.
-                logger.exception("Password reset email failed to send")
+            send_email_in_background(
+                "Reset your Tally password",
+                (
+                    f"Hi {user.first_name or ''},\n\n"
+                    f"Click the link below to set a new password for Tally. "
+                    f"This link works once and expires soon.\n\n{reset_url}\n\n"
+                    f"If you didn't request this, you can safely ignore this email."
+                ),
+                user.email,
+            )
         # "delivery" describes the server's email setup, not the account, so it
         # leaks nothing about who has one. It lets the app say so plainly when
         # email is not configured instead of promising an email that can't arrive.
         return Response(
             {
                 "detail": "If that email has an account, a reset link has been sent.",
-                "delivery": "email" if settings.EMAIL_HOST else "unavailable",
+                "delivery": "email" if settings.EMAIL_CONFIGURED else "unavailable",
             }
         )
 

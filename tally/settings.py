@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 import dj_database_url
 
@@ -88,11 +89,17 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 
 # ---------- Email (for password reset) ----------
-# Defaults to printing emails to the server log when unconfigured, so local
-# dev and tests never need real credentials. Set these env vars in Render for
-# real delivery — see README for the Gmail App Password setup.
+# Render's free plan blocks outbound SMTP (ports 25, 465, 587), so plain SMTP
+# cannot work there. The reliable free route is the Apps Script relay below,
+# which sends over HTTPS. With nothing configured, emails are only printed to
+# the server log, which keeps local development and tests credential-free.
+EMAIL_RELAY_URL = os.environ.get("EMAIL_RELAY_URL", "")
+EMAIL_RELAY_SECRET = os.environ.get("EMAIL_RELAY_SECRET", "")
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
-if EMAIL_HOST:
+EMAIL_TIMEOUT = 10  # a stuck connection must fail quickly, never hang a worker
+if EMAIL_RELAY_URL and EMAIL_RELAY_SECRET:
+    EMAIL_BACKEND = "users.mail_backend.AppsScriptEmailBackend"
+elif EMAIL_HOST:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
     EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
     EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
@@ -100,6 +107,8 @@ if EMAIL_HOST:
     EMAIL_USE_TLS = True
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_CONFIGURED = EMAIL_BACKEND != "django.core.mail.backends.console.EmailBackend"
+EMAIL_SEND_SYNC = "test" in sys.argv
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL") or (
     f"Tally <{EMAIL_HOST_USER}>" if EMAIL_HOST and EMAIL_HOST_USER else "Tally <no-reply@tally.app>"
 )
